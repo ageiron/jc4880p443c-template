@@ -21,6 +21,7 @@ idf_component_register(
         "services/http_client.cpp"
         "services/ai_service.cpp"
         "services/serial_console.cpp"
+        "services/display_service.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -36,6 +37,7 @@ idf_component_register(
         sdmmc
         esp_driver_sdmmc
         esp_driver_jpeg
+        esp_driver_ppa
         esp_http_client
         mbedtls
         espressif__esp_lvgl_port

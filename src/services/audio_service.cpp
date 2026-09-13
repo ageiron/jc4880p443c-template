@@ -8,12 +8,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <vector>
 
 namespace audio_service {
 
 static const char *TAG = "audio_service";
+static std::atomic<bool> s_stop_playback_requested{false};
 
 // Confirmed against vendor mp3_player.ino, the CODEC&TFCARD schematic, AND independently
 // against xiaozhi-esp32's shipping "guition-jc4880p443" board port (exact board match) — see
@@ -186,8 +188,25 @@ esp_err_t play_pcm(const uint8_t *pcm_data, size_t len, uint32_t sample_rate, in
     }
     esp_err_t err = open_dev(sample_rate, channels);
     if (err != ESP_OK) return err;
-    return esp_codec_dev_write(s_dev, const_cast<uint8_t *>(pcm_data), len);
+
+    // Written in chunks, not one call, so stop_playback() actually has somewhere to interrupt —
+    // esp_codec_dev_write() itself is a single blocking call with no way to cut it short once
+    // started. ~85ms/chunk at 24kHz mono keeps "stop" feeling responsive without much per-call
+    // overhead.
+    s_stop_playback_requested = false;
+    constexpr size_t CHUNK_BYTES = 4096;
+    size_t offset = 0;
+    while (offset < len) {
+        if (s_stop_playback_requested) break;
+        size_t chunk = std::min(CHUNK_BYTES, len - offset);
+        esp_err_t chunk_err = esp_codec_dev_write(s_dev, const_cast<uint8_t *>(pcm_data + offset), chunk);
+        if (chunk_err != ESP_OK) return chunk_err;
+        offset += chunk;
+    }
+    return ESP_OK;
 }
+
+void stop_playback() { s_stop_playback_requested = true; }
 
 esp_err_t play_tone(uint32_t freq_hz, uint32_t duration_ms) {
     if (!s_inited) {

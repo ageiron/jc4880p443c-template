@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include <cstring>
 
 namespace wifi_service {
@@ -19,6 +20,10 @@ static constexpr int STARTED_BIT = BIT2;
 static bool s_inited = false;
 static char s_ip[16] = "";
 static uint8_t s_last_disconnect_reason = 0;
+// Serializes connect() — main.cpp's persistent reconnect watchdog and a manual "Reconnect"/
+// "Connect" tap from the WiFi Connect screen could otherwise race each other's calls into the
+// same esp_wifi_connect()/event-group state.
+static SemaphoreHandle_t s_connect_mutex = nullptr;
 
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data) {
     (void)arg;
@@ -44,6 +49,8 @@ esp_err_t init() {
 
     s_event_group = xEventGroupCreate();
     if (!s_event_group) return ESP_ERR_NO_MEM;
+    s_connect_mutex = xSemaphoreCreateMutex();
+    if (!s_connect_mutex) return ESP_ERR_NO_MEM;
 
     esp_err_t err = esp_netif_init();
     if (err != ESP_OK) return err;
@@ -140,14 +147,21 @@ esp_err_t scan(std::vector<ApInfo> &results) {
     return ESP_OK;
 }
 
-esp_err_t connect(const std::string &ssid, const std::string &password, uint32_t timeout_ms) {
-    if (!s_inited) {
-        esp_err_t err = init();
-        if (err != ESP_OK) return err;
+// Reason codes that are (almost certainly) transient — the C6 co-processor/ESP-HOSTED link still
+// settling, or a momentary radio/timing hiccup — as opposed to a real credential/network problem
+// that retrying can't fix. Same underlying race as scan()'s retry above: measured on hardware,
+// this shows up especially right after boot, when wifi_service::init() has only just finished.
+static bool is_transient_reason(uint8_t reason) {
+    switch (reason) {
+        case 0:   return true; // no WIFI_EVENT_STA_DISCONNECTED fired at all — plain hang/timeout
+        case 205: return true; // "connection timed out"
+        case 203: return true; // "association failed" — seen to resolve on retry
+        case 1:   return true; // WIFI_REASON_UNSPECIFIED
+        default:  return false; // wrong password, network not found, etc. — retrying won't help
     }
+}
 
-    xEventGroupClearBits(s_event_group, CONNECTED_BIT | FAIL_BIT);
-
+static esp_err_t connect_locked(const std::string &ssid, const std::string &password, uint32_t timeout_ms) {
     wifi_config_t wifi_config = {};
     strncpy(reinterpret_cast<char *>(wifi_config.sta.ssid), ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
     strncpy(reinterpret_cast<char *>(wifi_config.sta.password), password.c_str(), sizeof(wifi_config.sta.password) - 1);
@@ -156,23 +170,52 @@ esp_err_t connect(const std::string &ssid, const std::string &password, uint32_t
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) return err;
 
-    err = esp_wifi_connect();
-    if (err != ESP_OK) {
-        // Already-connected-elsewhere case: disconnect and retry once.
-        esp_wifi_disconnect();
+    // Found via on-hardware testing: a single attempt frequently failed (reason 205/timeout)
+    // shortly after boot or after switching networks — the same ESP-HOSTED/C6-settling race
+    // scan() already retries around. Bounded retry here fixes the "took 2+ tries" symptom for
+    // both the silent boot-time reconnect and a manual tap of "Reconnect"/"Connect".
+    static constexpr int MAX_ATTEMPTS = 4;
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        xEventGroupClearBits(s_event_group, CONNECTED_BIT | FAIL_BIT);
+        s_last_disconnect_reason = 0;
+
         err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            // Already-connected-elsewhere case: disconnect and retry once within this attempt.
+            esp_wifi_disconnect();
+            err = esp_wifi_connect();
+            if (err != ESP_OK) return err;
+        }
+
+        EventBits_t bits = xEventGroupWaitBits(s_event_group, CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE,
+                                                pdMS_TO_TICKS(timeout_ms));
+        if (bits & CONNECTED_BIT) {
+            ESP_LOGI(TAG, "Connected to %s, IP %s (attempt %d/%d)", ssid.c_str(), s_ip, attempt + 1,
+                      MAX_ATTEMPTS);
+            return ESP_OK;
+        }
+
+        bool transient = is_transient_reason(s_last_disconnect_reason);
+        ESP_LOGW(TAG, "Attempt %d/%d failed to connect to %s (reason %u: %s)%s", attempt + 1, MAX_ATTEMPTS,
+                  ssid.c_str(), s_last_disconnect_reason, get_last_fail_reason().c_str(),
+                  transient && attempt + 1 < MAX_ATTEMPTS ? " — retrying" : "");
+        if (!transient) break; // credential/network problem — no point retrying
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    return ESP_FAIL;
+}
+
+esp_err_t connect(const std::string &ssid, const std::string &password, uint32_t timeout_ms) {
+    if (!s_inited) {
+        esp_err_t err = init();
         if (err != ESP_OK) return err;
     }
-
-    EventBits_t bits = xEventGroupWaitBits(s_event_group, CONNECTED_BIT | FAIL_BIT, pdFALSE, pdFALSE,
-                                            pdMS_TO_TICKS(timeout_ms));
-    if (bits & CONNECTED_BIT) {
-        ESP_LOGI(TAG, "Connected to %s, IP %s", ssid.c_str(), s_ip);
-        return ESP_OK;
-    }
-    ESP_LOGW(TAG, "Failed to connect to %s (reason %u: %s)", ssid.c_str(), s_last_disconnect_reason,
-              get_last_fail_reason().c_str());
-    return ESP_FAIL;
+    // See s_connect_mutex's comment — serializes against the boot/watchdog auto-reconnect task
+    // and any concurrent manual "Reconnect"/"Connect" tap.
+    xSemaphoreTake(s_connect_mutex, portMAX_DELAY);
+    esp_err_t result = connect_locked(ssid, password, timeout_ms);
+    xSemaphoreGive(s_connect_mutex);
+    return result;
 }
 
 void disconnect() {
@@ -181,8 +224,12 @@ void disconnect() {
 }
 
 bool is_connected() {
-    wifi_ap_record_t info;
-    return esp_wifi_sta_get_ap_info(&info) == ESP_OK;
+    // Cached from the event handler instead of a live esp_wifi_sta_get_ap_info() RPC round-trip
+    // to the C6 — found via on-hardware testing: a UI status indicator polling that every couple
+    // of seconds spammed "rpc_wifi_sta_get_ap_info: failed, status [12303]" continuously while
+    // disconnected, since each poll is a full SDIO/RPC transaction with its own chance to fail
+    // for reasons that have nothing to do with the actual WiFi state. See docs/BRINGUP.md.
+    return s_ip[0] != '\0';
 }
 
 std::string get_ip() { return std::string(s_ip); }

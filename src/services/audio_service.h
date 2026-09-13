@@ -16,8 +16,14 @@ esp_err_t set_volume(int volume_pct); // 0-100
 // Blocking: generates and plays a sine tone through the speaker.
 esp_err_t play_tone(uint32_t freq_hz, uint32_t duration_ms);
 
-// Blocking: plays raw 16-bit PCM at the given sample rate/channel count through the speaker.
+// Blocking: plays raw 16-bit PCM at the given sample rate/channel count through the speaker, in
+// chunks so stop_playback() can cut it short (e.g. a long assistant reply the user doesn't want
+// to sit through). Returns early (not an error) if stopped this way.
 esp_err_t play_pcm(const uint8_t *pcm_data, size_t len, uint32_t sample_rate, int channels = 1);
+
+// Cuts the current (or very next) play_pcm() call short. Safe to call from any task/context —
+// just sets a flag play_pcm()'s chunk loop checks.
+void stop_playback();
 
 esp_err_t start_capture();
 esp_err_t read_capture(uint8_t *buf, size_t len, size_t *bytes_read);

@@ -23,8 +23,11 @@ esp_err_t init();
 // Blocking scan (a few seconds). Read-only — does not join anything.
 esp_err_t scan(std::vector<ApInfo> &results);
 
-// Blocking connect/join with a timeout. Persist credentials yourself via nvs_config on success.
-esp_err_t connect(const std::string &ssid, const std::string &password, uint32_t timeout_ms = 15000);
+// Blocking connect/join, with a per-attempt timeout and an internal bounded retry (up to 4
+// attempts total) for transient failures — see is_transient_reason() in wifi_service.cpp. Worst
+// case (every attempt times out) is roughly 4 * timeout_ms; the 8s default keeps that under
+// ~35s. Persist credentials yourself via nvs_config on success.
+esp_err_t connect(const std::string &ssid, const std::string &password, uint32_t timeout_ms = 8000);
 
 void disconnect();
 bool is_connected();

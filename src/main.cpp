@@ -35,6 +35,7 @@
 #include "services/wifi_service.h"
 #include "services/nvs_config.h"
 #include "services/serial_console.h"
+#include "services/display_service.h"
 
 static const char *TAG = "CapabilityDemo";
 
@@ -53,17 +54,23 @@ static const char *TAG = "CapabilityDemo";
 // App startup after bring-up: services + launcher UI
 // =============================================================================
 
-// Attempts a silent reconnect using saved WiFi credentials (if any) in the background, so the
-// AI assistant screen may already be online by the time the user opens it. Non-blocking; the
-// WiFi Connect screen remains the way to (re)enter credentials or check status.
+// Persistent WiFi watchdog: connects using saved credentials at boot, then keeps checking every
+// 20s and silently reconnects if it ever drops — a router reboot, walking out of range and back,
+// etc. Found via on-hardware testing: a boot-time-only attempt (the original version of this
+// task) left the device stuck offline until someone noticed and manually tapped "Reconnect" on
+// the WiFi Connect screen; this makes reconnection actually automatic, not just at startup.
+// wifi_service::connect() already serializes against a concurrent manual reconnect (see its
+// s_connect_mutex), so this can't race the WiFi Connect screen's own connect_task.
 static void auto_reconnect_task(void *arg) {
     (void)arg;
-    std::string ssid, pass;
-    if (nvs_config::get_wifi_credentials(ssid, pass) == ESP_OK) {
-        ESP_LOGI(TAG, "Attempting to reconnect to saved network: %s", ssid.c_str());
-        wifi_service::connect(ssid, pass);
+    for (;;) {
+        std::string ssid, pass;
+        if (nvs_config::get_wifi_credentials(ssid, pass) == ESP_OK && !wifi_service::is_connected()) {
+            ESP_LOGI(TAG, "WiFi not connected, attempting reconnect to saved network: %s", ssid.c_str());
+            wifi_service::connect(ssid, pass);
+        }
+        vTaskDelay(pdMS_TO_TICKS(20000));
     }
-    vTaskDelete(NULL);
 }
 
 // =============================================================================
@@ -154,11 +161,17 @@ extern "C" void app_main(void) {
         .hres           = LCD_H_RES,
         .vres           = LCD_V_RES,
         .color_format   = LV_COLOR_FORMAT_RGB565,
-        .flags          = { .buff_spiram = true },
+        // sw_rotate: the ST7701 MIPI driver here doesn't implement swap_xy (only mirror()), so
+        // a 90/270 portrait<->landscape toggle can't go through LCD panel commands — this makes
+        // esp_lvgl_port rotate in software instead, using the ESP32-P4's PPA hardware block
+        // (CONFIG_LVGL_PORT_ENABLE_PPA=y in sdkconfig.defaults) rather than pure CPU rotation.
+        // See display_service.h and docs/BRINGUP.md "Portrait/landscape toggle".
+        .flags          = { .buff_spiram = true, .sw_rotate = true },
     };
     const lvgl_port_display_dsi_cfg_t dsi_disp_cfg = { .flags = { .avoid_tearing = 0 } };
     lv_display_t *disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_disp_cfg);
     ESP_ERROR_CHECK(disp == NULL ? ESP_FAIL : ESP_OK);
+    display_service::init(disp);
 
     // GT911 touch
     i2c_master_bus_handle_t i2c_bus = NULL;
@@ -211,8 +224,8 @@ extern "C" void app_main(void) {
     lvgl_port_unlock();
     ESP_LOGI(TAG, "UI ready");
 
-    // Non-blocking: try to reconnect WiFi with any saved credentials so the AI assistant may
-    // already be online without the user visiting the WiFi Connect screen first.
+    // Runs for the app's lifetime: connects at boot with any saved credentials, then keeps
+    // watching and silently reconnects if WiFi ever drops later — see the task's own comment.
     xTaskCreate(auto_reconnect_task, "wifi_autoconnect", 4096, NULL, 5, NULL);
 
     // API keys (Anthropic/OpenAI) are too long to type comfortably on the on-screen keyboard —

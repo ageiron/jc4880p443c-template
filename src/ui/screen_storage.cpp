@@ -383,12 +383,15 @@ lv_obj_t *create() {
     lv_label_set_text(title, "Storage & Video");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
     s_info_label = lv_label_create(scr);
     lv_obj_set_style_text_color(s_info_label, lv_color_hex(0xA6E3A1), LV_PART_MAIN);
-    lv_obj_align(s_info_label, LV_ALIGN_TOP_MID, 0, 75);
-
+    // Text set BEFORE aligning — lv_obj_align_to() computes the centered position from the
+    // label's width at the moment it's called, and an empty label is zero-width. Aligning first
+    // and setting text after "centered" a zero-width box, then the real text just grew
+    // rightward from that point instead of being centered — found via on-hardware testing (the
+    // info line and, since it chained off this one, the file list below it both drifted right).
     uint64_t total = 0, free_b = 0;
     if (sdcard_service::get_space(total, free_b) == ESP_OK) {
         lv_label_set_text_fmt(s_info_label, "%llu MB free / %llu MB total", free_b / (1024ULL * 1024),
@@ -396,10 +399,11 @@ lv_obj_t *create() {
     } else {
         lv_label_set_text(s_info_label, "No SD card detected.");
     }
+    lv_obj_align_to(s_info_label, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
 
     s_list = lv_list_create(scr);
-    lv_obj_set_size(s_list, LV_PCT(90), 560);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 110);
+    lv_obj_set_size(s_list, LV_PCT(90), 500);
+    lv_obj_align_to(s_list, s_info_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
 
     s_current_rel_path = "";
     refresh_list(s_current_rel_path);

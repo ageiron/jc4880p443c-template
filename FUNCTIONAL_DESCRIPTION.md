@@ -53,11 +53,21 @@ it and why).
 Each capability is a screen reachable from the home-screen launcher (`src/ui/launcher.cpp`).
 Screens share a small navigation helper (`src/ui/nav.cpp`) for a consistent back-button pattern.
 
-### 1. Home / Launcher (`ui/launcher.cpp`)
+### 1. Home / Launcher (`ui/launcher.cpp`, `services/display_service.cpp`)
 
 Grid of tiles, one per capability below. This *is* the display+touch capability demo — if you
 can see and tap the tiles, display and touch both work. (The original template's tap-counter
 screen is replaced by this.)
+
+Also hosts two cross-cutting pieces of UI:
+- A **portrait/landscape toggle** — an icon-only button, top-right corner. Rotates the whole UI
+  90° via LVGL software rotation accelerated by the ESP32-P4's PPA hardware block (the ST7701
+  MIPI-DSI driver here doesn't support hardware rotation itself — see
+  `services/display_service.cpp` and `docs/BRINGUP.md` "Portrait/landscape toggle"). Landscape is
+  mainly useful for the on-screen keyboard dialogs (WiFi/API key entry).
+- A **status bar** pinned to the bottom edge, currently showing live WiFi connection state
+  (green IP when connected, red "Not connected" otherwise) — reserved as the place future status
+  indicators (battery, SD card presence, etc.) would go if those capabilities are ever added.
 
 ### 2. WiFi scan (`ui/screen_wifi_scan.cpp`, `services/wifi_service.cpp`)
 
@@ -72,6 +82,11 @@ internet connection and scanning alone doesn't provide one. Uses the shared
 `ui/keyboard_dialog.cpp` (LVGL on-device keyboard) to enter SSID + password, calls
 `wifi_service::connect()`, and persists credentials via `services/nvs_config.cpp` so re-flashing
 firmware doesn't require re-entering WiFi credentials every time.
+
+Connection is otherwise **fully automatic**: `main.cpp`'s watchdog task connects with saved
+credentials at boot and keeps checking every 20s afterward, silently reconnecting if WiFi ever
+drops (router reboot, walking out of range and back) — this screen exists for the *first* entry
+of credentials and to check/force status, not as a step you need normally.
 
 ### 4. Storage & video (`ui/screen_storage.cpp`, `services/sdcard_service.cpp`)
 
@@ -130,6 +145,11 @@ mic (audio_service) --WAV--> OpenAI Whisper (STT, forced language=en)
 Requires: WiFi connected (capability 3), an OpenAI key set (capability 6), and a reply backend
 configured — either the Anthropic key, or the local-LLM toggle + URL. The assistant screen should
 clearly tell the user which prerequisite is missing rather than failing silently.
+
+While speaking, the talk button relabels to "Tap to Stop" and doubles as a playback-interrupt
+control — `audio_service::play_pcm()` writes in small chunks specifically so a long reply can be
+cut short mid-sentence instead of having to sit through the whole thing
+(`audio_service::stop_playback()` / `ai_service::stop_speaking()`).
 
 ## Explicitly out of scope (this iteration)
 
@@ -383,3 +403,31 @@ this one.
 
   **Every in-scope capability (display/touch, WiFi, storage/video, audio, AI assistant) is now
   confirmed working on real hardware.**
+
+- 2026-09-13 (continued) — Follow-up polish requested after the above, all confirmed on
+  hardware:
+  15. **WiFi made fully automatic**: connect used to sometimes need 2+ manual tries (an
+      ESP-HOSTED/C6-settling race — same root cause `scan()` already retried around, just not
+      `connect()`); it now retries internally. The boot-time auto-reconnect was also one-shot —
+      it's now a persistent 20s watchdog, so a later drop (router reboot, etc.) recovers on its
+      own instead of needing a manual "Reconnect" tap.
+  16. **Launcher status bar + portrait/landscape toggle** added (capability 1) — see its own
+      section above. Both went through a couple of on-hardware layout iterations: fixed screen
+      corners crept into the centered title in portrait's narrower width; fixed with a proper
+      flex layout instead (full detail in `docs/BRINGUP.md`).
+  17. **Settings and Storage & Video layout bugs**: rows/content progressively drifted right,
+      eventually needing horizontal scrolling to see later content. Root cause was chaining each
+      row's position off the *previous row's own off-center button* rather than something that
+      stayed horizontally neutral — the offset compounded further right with every row. Separately,
+      Storage's SD-space label was aligned *before* its text was set, so LVGL centered an empty
+      (zero-width) label and the real text just grew rightward from that point. Both rewritten
+      with proper flex layouts / correct ordering — see `docs/BRINGUP.md`.
+  18. **Stop-speech control**: the AI Assistant's talk button now doubles as a "Tap to Stop"
+      during playback, so a long reply doesn't have to be sat through. Needed
+      `audio_service::play_pcm()` to write in chunks (~85ms each) instead of one blocking call,
+      since there was previously no point at which playback could be interrupted.
+
+  **General lesson reinforced across 16-17**: prefer LVGL flex layouts over manually-placed
+  fixed/relative pixel offsets for anything with more than one or two children, or whose content
+  length can vary — this class of bug (drift, overlap, corner-crowding) kept recurring with
+  manual positioning and stopped once flex did the layout math instead.

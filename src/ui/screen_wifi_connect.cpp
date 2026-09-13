@@ -70,7 +70,7 @@ lv_obj_t *create() {
     lv_label_set_text(title, "WiFi Connect");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
     lv_obj_t *note = lv_label_create(scr);
     lv_label_set_text(note, "Needed for the AI assistant screen to reach the internet.");

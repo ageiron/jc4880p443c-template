@@ -731,3 +731,101 @@ PSRAM-explicit — the ~250 KiB internal heap is shared with LVGL, WiFi,
 and every task stack, so it has far less headroom than the raw "31 MB
 free" PSRAM number suggests, and a failed allocation here doesn't
 degrade gracefully, it reboots the device (no C++ exceptions).
+
+## WiFi connect frequently needed 2+ tries
+
+`wifi_service::connect()` (and the silent boot-time auto-reconnect that calls it) sometimes
+failed on the first attempt with `reason 205: connection timed out`, succeeding on a second or
+third manual retry. Same underlying cause as `scan()`'s already-documented retry above: the
+ESP-HOSTED link to the C6 co-processor is still settling for a couple of seconds after
+`wifi_service::init()` returns, and there's no host-visible "C6 is actually ready" event to wait
+on instead. Confirmed directly in a boot-time serial capture this session: the auto-reconnect
+task's single attempt failed with exactly this reason, close on the heels of `init()` completing.
+
+**Fix**: `connect()` now retries internally (up to 4 attempts, 500ms apart) for reason codes that
+are transient (0 — no disconnect event fired at all, a plain hang; 1 — unspecified; 203 —
+association failed; 205 — timed out), but fails fast on the first attempt for anything that looks
+like a real credential/network problem (wrong password, network not found, etc.) — no point
+retrying those, and doing so would just delay the user seeing the real error. This is transparent
+to both the silent auto-reconnect and the WiFi Connect screen's "Reconnect"/"Connect" buttons,
+since both go through the same `connect()`.
+
+## `is_connected()` polling spammed RPC failures
+
+Adding a WiFi status indicator to the launcher screen (polled every 2s via an `lv_timer`)
+surfaced that `wifi_service::is_connected()` was implemented as a live
+`esp_wifi_sta_get_ap_info()` call — a full ESP-HOSTED RPC round-trip to the C6 over SDIO, not a
+free local check. Polling it continuously while disconnected spammed the log with
+`rpc_wifi_sta_get_ap_info: failed, status [12303]` every single poll (confirmed on hardware: 2s
+apart, indefinitely). **Fix**: `is_connected()` now just checks the cached IP string
+(`s_ip[0] != '\0'`) that the event handler already maintains from `IP_EVENT_STA_GOT_IP`/
+`WIFI_EVENT_STA_DISCONNECTED` — no RPC call at all. **Lesson**: on this board, anything that
+crosses the ESP-HOSTED link (any `esp_wifi_*` call, not just scan/connect) is a real round-trip
+with its own failure modes, not a cheap local query — don't poll one in a UI timer loop when a
+locally-cached value will do.
+
+## Portrait/landscape toggle
+
+The ST7701 MIPI-DSI driver here (`src/esp_lcd_st7701_mipi.c`) only implements the panel's
+`mirror()` vendor callback, not `swap_xy()` — visible every boot as a harmless-looking
+`E (...) lcd_panel: esp_lcd_panel_swap_xy(50): swap_xy is not supported by this panel` log line
+(esp_lvgl_port probes it once during setup regardless of whether rotation is actually requested).
+That means a 90°/270° rotation can't go through LCD panel commands on this board — no MADCTL-only
+trick like `mirror()` uses.
+
+**Fix**: use `esp_lvgl_port`'s `flags.sw_rotate` display option instead (`src/main.cpp`'s
+`disp_cfg`), which handles rotation above the panel-driver layer and doesn't care whether the
+panel itself supports `swap_xy`. On its own this would mean pure-CPU rotation (slow, and this
+board's video/audio pipeline is already close to its performance ceiling — see "Choppy audio and
+video" above) — but ESP32-P4 has a PPA (Pixel Processing Accelerator) 2D-DMA block, and
+`esp_lvgl_port` can use it for this automatically. That path is gated behind its own Kconfig,
+off by default: `CONFIG_LVGL_PORT_ENABLE_PPA=y` (added to `sdkconfig.defaults`) plus
+`esp_driver_ppa` in `src/CMakeLists.txt`'s `REQUIRES`. `display_service.cpp` wraps
+`lv_display_set_rotation()` for the rest of the app.
+
+Not fully load-tested: rotating while a video is actively decoding/playing. The toggle button
+lives on the launcher screen, away from that scenario, but if a future session adds rotation
+*during* video playback, treat it with the same suspicion as the choppiness/deadlock bugs above
+and verify on hardware before assuming it's fine.
+
+## WiFi dropped later, needed a manual reconnect
+
+The original `auto_reconnect_task` only ran once, at boot. If WiFi dropped later for any reason
+(router reboot, walking out of range and back), the device stayed offline until someone noticed
+and manually tapped "Reconnect" — confirmed on hardware this way once. **Fix**: the task is now a
+persistent loop (`src/main.cpp`) that checks `wifi_service::is_connected()` every 20s for the
+app's lifetime and silently reconnects with saved credentials if it's ever false. Since this now
+runs concurrently with whatever the WiFi Connect screen's own manual "Reconnect"/"Connect" button
+might be doing, `wifi_service::connect()` grew an internal mutex (`s_connect_mutex`) so the two
+can't race each other's `esp_wifi_connect()` calls and event-group state.
+
+## Back button / title overlap
+
+`nav::add_back_button()` places a fixed 90x50 button at the screen's top-left corner (y 10-60) on
+every screen that has one. Every screen's title was independently placed at `TOP_MID, 0, 30`
+(centered, y starting at 30) — for a long enough title (`"Audio: Speaker + Mic"` was the one
+that actually got noticed on hardware; several others are just as wide), the centered text
+extends far enough left to sit underneath the back button, both vertically (30-70 overlaps
+10-60) and, if the text is wide, horizontally too.
+
+**Fix**: moved every screen's title down to `TOP_MID, 0, 65` — enough to clear the back button's
+bottom edge (60) regardless of title text width, so this doesn't depend on measuring text at
+runtime. Anything positioned below the title using an *absolute* pixel y (rather than
+`lv_obj_align_to(..., title, ...)`) had to be pushed down or converted to a relative anchor too —
+`screen_settings.cpp` in particular was refactored so its rows chain off the actual rendered
+height of the element above (`make_row()` now takes an anchor object + gap, not an absolute y),
+since its notes wrap to a variable number of lines and a fixed offset would silently drift out of
+sync again the next time any of that text changes. **General lesson**: prefer `lv_obj_align_to()`
+relative to the previous element over `lv_obj_align()` with a guessed absolute y wherever the
+thing above could plausibly change size (wrapped text, a title, anything conditionally shown) —
+absolute offsets only stay correct by coincidence.
+
+## Launcher header controls overlapped the title
+
+Added a WiFi status label (top-left corner) and a landscape/portrait toggle button (top-right
+corner) to the launcher; both were placed at fixed screen corners and, in portrait's narrower
+480px width, sat underneath the centered title text — same class of bug as the back button one
+above, just screen-specific corner placement instead of a shared helper. **Fix**: both now live
+in a flex row anchored below the subtitle (`lv_obj_align_to(status_row, sub, LV_ALIGN_OUT_BOTTOM_MID, ...)`)
+instead of the screen's fixed corners, so it adapts to portrait vs. landscape width automatically
+rather than needing separate corner math for each orientation.

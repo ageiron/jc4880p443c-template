@@ -122,13 +122,13 @@ lv_obj_t *create() {
     lv_label_set_text(title, "Audio: Speaker + Mic");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
     // Speaker section
     lv_obj_t *speaker_lbl = lv_label_create(scr);
     lv_label_set_text(speaker_lbl, "Speaker");
     lv_obj_set_style_text_color(speaker_lbl, lv_color_hex(0xA6E3A1), LV_PART_MAIN);
-    lv_obj_align(speaker_lbl, LV_ALIGN_TOP_LEFT, 30, 110);
+    lv_obj_align(speaker_lbl, LV_ALIGN_TOP_LEFT, 30, 120);
 
     lv_obj_t *tone_btn = lv_btn_create(scr);
     lv_obj_set_size(tone_btn, 160, 55);
@@ -141,7 +141,7 @@ lv_obj_t *create() {
     lv_obj_t *vol_lbl = lv_label_create(scr);
     lv_label_set_text(vol_lbl, "Volume");
     lv_obj_set_style_text_color(vol_lbl, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
-    lv_obj_align(vol_lbl, LV_ALIGN_TOP_LEFT, 220, 110);
+    lv_obj_align(vol_lbl, LV_ALIGN_TOP_LEFT, 220, 120);
 
     lv_obj_t *slider = lv_slider_create(scr);
     lv_obj_set_size(slider, 180, 15);

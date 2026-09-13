@@ -11,6 +11,7 @@ static lv_obj_t *s_transcript_list = nullptr;
 static lv_obj_t *s_warning_label = nullptr;
 static lv_obj_t *s_talk_btn = nullptr;
 static lv_obj_t *s_talk_btn_lbl = nullptr;
+static ai_service::State s_current_state = ai_service::State::Idle;
 
 static const char *state_text(ai_service::State s) {
     switch (s) {
@@ -45,12 +46,17 @@ static void refresh_warning() {
 
 static void on_state(ai_service::State state, const std::string &detail) {
     if (!lvgl_port_lock(0)) return;
+    s_current_state = state;
     lv_label_set_text(s_state_label, state_text(state));
     if (state == ai_service::State::Error) {
         lv_list_add_text(s_transcript_list, detail.c_str());
     }
-    bool busy = (state != ai_service::State::Idle && state != ai_service::State::Error);
-    if (!busy) {
+    // While Speaking, the talk button doubles as a "stop" control (see talk_pressed_cb) — for a
+    // long reply the user doesn't want to sit through the whole thing. Relabeled to make that
+    // discoverable rather than silent.
+    if (state == ai_service::State::Speaking) {
+        lv_label_set_text(s_talk_btn_lbl, LV_SYMBOL_STOP " Tap to Stop");
+    } else if (state == ai_service::State::Idle || state == ai_service::State::Error) {
         lv_label_set_text(s_talk_btn_lbl, LV_SYMBOL_AUDIO " Hold to Talk");
     }
     lvgl_port_unlock();
@@ -67,6 +73,10 @@ static void on_transcript(const std::string &user_text, const std::string &assis
 
 static void talk_pressed_cb(lv_event_t *e) {
     (void)e;
+    if (s_current_state == ai_service::State::Speaking) {
+        ai_service::stop_speaking();
+        return;
+    }
     refresh_warning();
     auto pre = ai_service::check_prerequisites();
     if (!(pre.wifi_ok && pre.reply_backend_ok && pre.openai_key_ok)) return;
@@ -88,7 +98,7 @@ lv_obj_t *create() {
     lv_label_set_text(title, "AI Voice Assistant");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
     s_warning_label = lv_label_create(scr);
     lv_label_set_long_mode(s_warning_label, LV_LABEL_LONG_WRAP);
@@ -96,15 +106,19 @@ lv_obj_t *create() {
     lv_obj_set_style_text_align(s_warning_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_warning_label, lv_color_hex(0xF38BA8), LV_PART_MAIN);
     lv_obj_align_to(s_warning_label, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
+    // Populated (and possibly hidden) now, before anchoring what comes after it — its final
+    // height/visibility (it can be 1-3 lines depending on what's missing) has to be settled
+    // first, or the elements below would be positioned against its pre-refresh size instead.
+    refresh_warning();
 
     s_state_label = lv_label_create(scr);
     lv_label_set_text(s_state_label, state_text(ai_service::State::Idle));
     lv_obj_set_style_text_color(s_state_label, lv_color_hex(0xA6E3A1), LV_PART_MAIN);
-    lv_obj_align(s_state_label, LV_ALIGN_TOP_MID, 0, 100);
+    lv_obj_align_to(s_state_label, s_warning_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 12);
 
     s_transcript_list = lv_list_create(scr);
-    lv_obj_set_size(s_transcript_list, LV_PCT(90), 420);
-    lv_obj_align(s_transcript_list, LV_ALIGN_TOP_MID, 0, 130);
+    lv_obj_set_size(s_transcript_list, LV_PCT(90), 380);
+    lv_obj_align_to(s_transcript_list, s_state_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
     lv_list_add_text(s_transcript_list, "Conversation will appear here.");
 
     s_talk_btn = lv_btn_create(scr);
@@ -115,8 +129,6 @@ lv_obj_t *create() {
     s_talk_btn_lbl = lv_label_create(s_talk_btn);
     lv_label_set_text(s_talk_btn_lbl, LV_SYMBOL_AUDIO " Hold to Talk");
     lv_obj_center(s_talk_btn_lbl);
-
-    refresh_warning();
 
     return scr;
 }

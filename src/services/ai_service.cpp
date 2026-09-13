@@ -29,6 +29,8 @@ Prerequisites check_prerequisites() {
 
 void stop_recording() { s_stop_requested = true; }
 
+void stop_speaking() { audio_service::stop_playback(); }
+
 // ---- WAV wrapper (Whisper needs a real WAV, not raw PCM) ------------------
 
 #pragma pack(push, 1)

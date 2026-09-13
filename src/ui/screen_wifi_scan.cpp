@@ -63,7 +63,7 @@ lv_obj_t *create() {
     lv_label_set_text(title, "WiFi Scan");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
     lv_obj_t *note = lv_label_create(scr);
     lv_label_set_text(note, "Read-only. Use WiFi Connect to actually join a network.");
@@ -71,8 +71,8 @@ lv_obj_t *create() {
     lv_obj_align_to(note, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
 
     s_list = lv_list_create(scr);
-    lv_obj_set_size(s_list, LV_PCT(90), 520);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 110);
+    lv_obj_set_size(s_list, LV_PCT(90), 480);
+    lv_obj_align_to(s_list, note, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
     lv_list_add_text(s_list, "Tap Scan to search for networks.");
 
     lv_obj_t *btn = lv_btn_create(scr);

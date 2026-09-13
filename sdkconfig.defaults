@@ -51,6 +51,14 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
 # --- Compiler optimization ---
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
+# --- Screen rotation (portrait/landscape toggle) ---
+# The ST7701 MIPI-DSI driver here (src/esp_lcd_st7701_mipi.c) doesn't implement swap_xy — only
+# mirror() — so a 90/270 rotation can't be done via LCD panel commands (see
+# docs/BRINGUP.md "Portrait/landscape toggle"). esp_lvgl_port's sw_rotate path covers that, and
+# this flag lets it use the ESP32-P4's PPA (Pixel Processing Accelerator) hardware block instead
+# of pure-CPU rotation.
+CONFIG_LVGL_PORT_ENABLE_PPA=y
+
 # --- BSP (pulled in transitively — BSP display init is NOT used, see
 # docs/BRINGUP.md "BSP does not support this panel". These options only
 # configure Kconfig defaults for the BSP component itself.) ---

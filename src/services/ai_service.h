@@ -48,4 +48,7 @@ void start_turn(uint32_t max_seconds, StateCb on_state, TranscriptCb on_transcri
 // Ends recording early (press-and-hold-to-talk release).
 void stop_recording();
 
+// Cuts a long reply short mid-playback (State::Speaking). No-op otherwise.
+void stop_speaking();
+
 } // namespace ai_service

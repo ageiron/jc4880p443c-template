@@ -91,16 +91,26 @@ static void set_local_llm_model_btn_cb(lv_event_t *e) {
         });
 }
 
-static lv_obj_t *make_row(lv_obj_t *scr, int y_offset, const char *set_btn_label,
-                           lv_event_cb_t cb, lv_obj_t **out_label) {
-    lv_obj_t *label = lv_label_create(scr);
+// A flex row (label left, "Set" button right) — a flex child of `content`, not positioned with
+// guessed pixel offsets off the previous row. That was the actual bug found via on-hardware
+// testing: chaining each row's position off the *previous row's button* (itself off-center by
+// design, for the two-column look) compounded the horizontal offset further right with every
+// row, eventually requiring horizontal scrolling to see later rows. Flex only ever needs to know
+// about the row's own two children, so there's nothing left to compound. See docs/BRINGUP.md
+// "Settings/Storage layout drifted right".
+static lv_obj_t *make_row(lv_obj_t *content, const char *set_btn_label, lv_event_cb_t cb, lv_obj_t **out_label) {
+    lv_obj_t *row = lv_obj_create(content);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, LV_PCT(100), 45);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *label = lv_label_create(row);
     lv_obj_set_style_text_color(label, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
-    lv_obj_align(label, LV_ALIGN_TOP_MID, -60, y_offset);
     *out_label = label;
 
-    lv_obj_t *btn = lv_btn_create(scr);
-    lv_obj_set_size(btn, 100, 45);
-    lv_obj_align(btn, LV_ALIGN_TOP_MID, 160, y_offset - 10);
+    lv_obj_t *btn = lv_btn_create(row);
+    lv_obj_set_size(btn, 90, 45);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *btn_lbl = lv_label_create(btn);
     lv_label_set_text(btn_lbl, set_btn_label);
@@ -117,49 +127,61 @@ lv_obj_t *create() {
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 65);
 
-    lv_obj_t *note = lv_label_create(scr);
+    // Everything below the title is a flex column — see make_row's comment for why (this
+    // replaced a chain of lv_obj_align_to() calls that drifted horizontally). Scrolls on its own
+    // if content doesn't fit, e.g. in landscape's shorter 480px height.
+    lv_obj_t *content = lv_obj_create(scr);
+    lv_obj_remove_style_all(content);
+    lv_obj_set_size(content, LV_PCT(88), LV_PCT(75));
+    lv_obj_align_to(content, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(content, 16, LV_PART_MAIN);
+
+    lv_obj_t *note = lv_label_create(content);
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(note, LV_PCT(85));
+    lv_obj_set_width(note, LV_PCT(100));
     lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(note, "Needed for the AI voice assistant screen. Stored in NVS on-device, never "
                              "hardcoded. Keys are long -- easiest set over USB serial (SET_ANTHROPIC_KEY:/"
                              "SET_OPENAI_KEY: in the serial monitor). The buttons below use the on-screen "
                              "keyboard instead, if you'd rather type it here.");
     lv_obj_set_style_text_color(note, lv_color_hex(0x6c7086), LV_PART_MAIN);
-    lv_obj_align_to(note, title, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
 
-    make_row(scr, 190, "Set", set_openai_btn_cb, &s_openai_label);
-    s_anthropic_row_btn = make_row(scr, 260, "Set", set_anthropic_btn_cb, &s_anthropic_label);
+    make_row(content, "Set", set_openai_btn_cb, &s_openai_label);
+    s_anthropic_row_btn = make_row(content, "Set", set_anthropic_btn_cb, &s_anthropic_label);
 
-    lv_obj_t *sep = lv_label_create(scr);
+    lv_obj_t *sep = lv_label_create(content);
     lv_label_set_text(sep, "Reply backend (pick one):");
     lv_obj_set_style_text_color(sep, lv_color_hex(0x89B4FA), LV_PART_MAIN);
-    lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 320);
 
-    lv_obj_t *toggle_lbl = lv_label_create(scr);
+    lv_obj_t *toggle_row = lv_obj_create(content);
+    lv_obj_remove_style_all(toggle_row);
+    lv_obj_set_size(toggle_row, LV_PCT(100), 40);
+    lv_obj_set_flex_flow(toggle_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(toggle_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *toggle_lbl = lv_label_create(toggle_row);
     lv_label_set_text(toggle_lbl, "Use local LLM (LM Studio/Ollama)");
     lv_obj_set_style_text_color(toggle_lbl, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
-    lv_obj_align(toggle_lbl, LV_ALIGN_TOP_MID, -70, 360);
 
-    s_local_llm_switch = lv_switch_create(scr);
-    lv_obj_align(s_local_llm_switch, LV_ALIGN_TOP_MID, 150, 355);
+    s_local_llm_switch = lv_switch_create(toggle_row);
     lv_obj_add_event_cb(s_local_llm_switch, local_llm_toggle_cb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    make_row(scr, 410, "Set", set_local_llm_url_btn_cb, &s_local_llm_url_label);
-    make_row(scr, 470, "Set", set_local_llm_model_btn_cb, &s_local_llm_model_label);
+    make_row(content, "Set", set_local_llm_url_btn_cb, &s_local_llm_url_label);
+    make_row(content, "Set", set_local_llm_model_btn_cb, &s_local_llm_model_label);
 
-    lv_obj_t *local_note = lv_label_create(scr);
+    lv_obj_t *local_note = lv_label_create(content);
     lv_label_set_long_mode(local_note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(local_note, LV_PCT(85));
+    lv_obj_set_width(local_note, LV_PCT(100));
     lv_obj_set_style_text_align(local_note, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_text(local_note, "When on, the AI Assistant sends the reply step to this LAN server's "
                                    "OpenAI-compatible /v1/chat/completions endpoint instead of Anthropic — "
                                    "no API key needed. Whisper (speech-to-text) and TTS still use OpenAI "
                                    "either way, so the OpenAI key above is always required.");
     lv_obj_set_style_text_color(local_note, lv_color_hex(0x6c7086), LV_PART_MAIN);
-    lv_obj_align(local_note, LV_ALIGN_TOP_MID, 0, 520);
 
     refresh_labels();
 
