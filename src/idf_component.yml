@@ -27,3 +27,13 @@ dependencies:
   # in src/ and the esp_lcd_touch_gt911 component.
   espressif/esp32_p4_function_ev_board:
     version: "*"
+  # ES8311 audio codec (speaker + mic). Provides esp_codec_dev.h + esp_codec_dev_defaults.h
+  # (es8311_codec_new, audio_codec_new_i2s_data/i2c_ctrl/gpio) — see docs/BRINGUP.md "Audio
+  # codec bring-up". Confirmed as the component the vendor's own EV-board BSP uses internally.
+  espressif/esp_codec_dev:
+    version: "~1.5"
+  # AVI container + MJPEG frame decode for the storage screen's video playback — see
+  # docs/BRINGUP.md "Video playback". Version pinned to match the vendor's own
+  # esp_brookesia_phone example on this exact board family.
+  espressif/avi_player:
+    version: "^2.0.0"

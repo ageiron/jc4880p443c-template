@@ -4,6 +4,23 @@ idf_component_register(
         "esp_lcd_st7701.c"
         "esp_lcd_st7701_mipi.c"
         "esp_lcd_st7701_rgb.c"
+        "ui/launcher.cpp"
+        "ui/nav.cpp"
+        "ui/keyboard_dialog.cpp"
+        "ui/screen_wifi_scan.cpp"
+        "ui/screen_wifi_connect.cpp"
+        "ui/screen_storage.cpp"
+        "ui/screen_audio.cpp"
+        "ui/screen_settings.cpp"
+        "ui/screen_assistant.cpp"
+        "services/i2c_bus.cpp"
+        "services/nvs_config.cpp"
+        "services/wifi_service.cpp"
+        "services/sdcard_service.cpp"
+        "services/audio_service.cpp"
+        "services/http_client.cpp"
+        "services/ai_service.cpp"
+        "services/serial_console.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -15,10 +32,18 @@ idf_component_register(
         esp_lcd
         esp_hw_support
         json
+        fatfs
+        sdmmc
+        esp_driver_sdmmc
+        esp_driver_jpeg
+        esp_http_client
+        mbedtls
         espressif__esp_lvgl_port
         espressif__esp_lcd_touch_gt911
         espressif__esp_lcd_touch
         espressif__esp_hosted
         espressif__esp_wifi_remote
         espressif__esp32_p4_function_ev_board
+        espressif__esp_codec_dev
+        espressif__avi_player
 )

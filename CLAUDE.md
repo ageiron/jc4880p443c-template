@@ -1,4 +1,4 @@
-# {{PROJECT_NAME}} — agent context
+# CapabilityDemo — agent context
 
 Stack: esp32-device, C++ (ESP-IDF framework via PlatformIO), target board JC4880P443C_I_W.
 

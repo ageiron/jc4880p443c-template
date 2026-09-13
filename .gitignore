@@ -19,7 +19,6 @@ dependencies.lock
 # ESP-IDF auto-generated files
 sdkconfig
 sdkconfig.esp32p4
-/CMakeLists.txt
 
 # Editor
 .vscode/*.log

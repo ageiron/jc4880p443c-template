@@ -1,15 +1,11 @@
 /**
- * {{PROJECT_NAME}} — JC4880P443C_I_W bring-up starter
+ * CapabilityDemo — JC4880P443C_I_W hardware capability demo
  *
- * Minimal proof-of-life app: brings up PSRAM, the ST7701 MIPI-DSI display,
- * LVGL, and GT911 touch, then shows a screen with a touch-reactive counter.
- * Tap the button to confirm touch works; watch the counter/label to confirm
- * the display and LVGL refresh loop work.
- *
- * Replace create_ui() (and everything below it) with your actual app.
- * The block above it (app_main up through touch init) is verified working
- * bring-up sequence for this exact board — see docs/BRINGUP.md before
- * touching it.
+ * app_main() through touch init below is the verified board bring-up sequence
+ * (PSRAM, ST7701 MIPI-DSI display, LVGL, GT911 touch) — see docs/BRINGUP.md
+ * before touching any of it. Everything after that launches the capability
+ * demo launcher (src/ui/launcher.cpp) instead of a placeholder screen — see
+ * FUNCTIONAL_DESCRIPTION.md for what each screen does.
  *
  * Hardware: Guition JC4880P443C_I_W (ESP32-P4 + ESP32-C6)
  */
@@ -31,8 +27,16 @@
 #include "esp_lcd_st7701.h"
 #include "esp_psram.h"
 #include "esp_private/esp_psram_extram.h"
+#include <string>
 
-static const char *TAG = "{{PROJECT_NAME}}";
+#include "ui/launcher.h"
+#include "ui/nav.h"
+#include "services/i2c_bus.h"
+#include "services/wifi_service.h"
+#include "services/nvs_config.h"
+#include "services/serial_console.h"
+
+static const char *TAG = "CapabilityDemo";
 
 // ---- Hardware ----------------------------------------------------------------
 #define LCD_H_RES             480
@@ -46,48 +50,20 @@ static const char *TAG = "{{PROJECT_NAME}}";
 #define TP_I2C_SCL            GPIO_NUM_8
 
 // =============================================================================
-// UI — replace with your app
+// App startup after bring-up: services + launcher UI
 // =============================================================================
 
-static lv_obj_t *g_counter_lbl;
-static int g_tap_count = 0;
-
-static void btn_event_cb(lv_event_t *e) {
-    (void)e;
-    g_tap_count++;
-    lv_label_set_text_fmt(g_counter_lbl, "Taps: %d", g_tap_count);
-}
-
-static void create_ui(void) {
-    lv_obj_t *scr = lv_scr_act();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x181825), LV_PART_MAIN);
-
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "{{PROJECT_NAME}}");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 60);
-
-    lv_obj_t *sub = lv_label_create(scr);
-    lv_label_set_text(sub, "JC4880P443C_I_W bring-up OK");
-    lv_obj_set_style_text_color(sub, lv_color_hex(0xA6E3A1), LV_PART_MAIN);
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 110);
-
-    lv_obj_t *btn = lv_btn_create(scr);
-    lv_obj_set_size(btn, 200, 80);
-    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *btn_lbl = lv_label_create(btn);
-    lv_label_set_text(btn_lbl, "Tap me");
-    lv_obj_center(btn_lbl);
-
-    g_counter_lbl = lv_label_create(scr);
-    lv_label_set_text(g_counter_lbl, "Taps: 0");
-    lv_obj_set_style_text_color(g_counter_lbl, lv_color_hex(0xCDD6F4), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_counter_lbl, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_align(g_counter_lbl, LV_ALIGN_CENTER, 0, 120);
+// Attempts a silent reconnect using saved WiFi credentials (if any) in the background, so the
+// AI assistant screen may already be online by the time the user opens it. Non-blocking; the
+// WiFi Connect screen remains the way to (re)enter credentials or check status.
+static void auto_reconnect_task(void *arg) {
+    (void)arg;
+    std::string ssid, pass;
+    if (nvs_config::get_wifi_credentials(ssid, pass) == ESP_OK) {
+        ESP_LOGI(TAG, "Attempting to reconnect to saved network: %s", ssid.c_str());
+        wifi_service::connect(ssid, pass);
+    }
+    vTaskDelete(NULL);
 }
 
 // =============================================================================
@@ -166,7 +142,14 @@ extern "C" void app_main(void) {
         .io_handle      = io_handle,
         .panel_handle   = panel_handle,
         .control_handle = NULL,
-        .buffer_size    = LCD_H_RES * 100,
+        // Full-frame buffer, not a partial (100-row) one — the video playback screen replaces
+        // this whole buffer's contents on every decoded frame (~15-25x/second) via
+        // lv_canvas_set_buffer(); with a partial buffer LVGL has to flush the screen in 8
+        // separate chunks per frame, and that per-chunk overhead was the dominant cost behind
+        // choppy video/audio on hardware (canvas+flush roughly doubled per-frame time versus
+        // decode alone). PSRAM is abundant here (~31 MB free) so the larger buffer costs
+        // nothing meaningful. See docs/BRINGUP.md "Video playback".
+        .buffer_size    = LCD_H_RES * LCD_V_RES,
         .double_buffer  = true,
         .hres           = LCD_H_RES,
         .vres           = LCD_V_RES,
@@ -188,6 +171,9 @@ extern "C" void app_main(void) {
         .flags             = { .enable_internal_pullup = true },
     };
     ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));
+    // audio_service (ES8311 codec) reuses this exact bus handle instead of claiming GPIO7/8 a
+    // second time — see docs/BRINGUP.md "Audio codec bring-up".
+    i2c_bus_registry::set_shared_bus(i2c_bus);
 
     esp_lcd_panel_io_handle_t tp_io = NULL;
     // NOTE: fields set in struct declaration order, NOT via the
@@ -219,11 +205,20 @@ extern "C" void app_main(void) {
     lv_indev_t *indev = lvgl_port_add_touch(&touch_port_cfg);
     ESP_ERROR_CHECK(indev == NULL ? ESP_FAIL : ESP_OK);
 
-    // Build UI
+    // Build UI: launcher + per-capability screens (src/ui/)
     lvgl_port_lock(0);
-    create_ui();
+    nav::init(launcher::create());
     lvgl_port_unlock();
     ESP_LOGI(TAG, "UI ready");
+
+    // Non-blocking: try to reconnect WiFi with any saved credentials so the AI assistant may
+    // already be online without the user visiting the WiFi Connect screen first.
+    xTaskCreate(auto_reconnect_task, "wifi_autoconnect", 4096, NULL, 5, NULL);
+
+    // API keys (Anthropic/OpenAI) are too long to type comfortably on the on-screen keyboard —
+    // see docs/BRINGUP.md. Lets them be set over the same USB serial connection used for
+    // flashing instead: SET_ANTHROPIC_KEY:<key> / SET_OPENAI_KEY:<key> via the serial monitor.
+    serial_console::start();
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(30000));
